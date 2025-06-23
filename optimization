@@ -21,7 +21,7 @@ SCRIPT_NAME="$(basename "$0")"
 LOG_FILE="/var/log/optimize-debian.log"
 BACKUP_ROOT_DEFAULT="/root/optimize-backup-$(date +%Y%m%d-%H%M%S)"
 
-# Colores
+# Colores para mensajes
 RED='\033[0;31m'    GREEN='\033[0;32m'
 YELLOW='\033[1;33m' BLUE='\033[0;34m'
 NC='\033[0m'        # No Color
@@ -37,7 +37,6 @@ err()  { echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE"; }
 # Verificaciones iniciales
 # ────────────────────────────────────────────────────────────
 ensure_root() {
-  # 🔒 Asegura ejecución como root
   if [[ $EUID -ne 0 ]]; then
     err "Ejecuta como root o con sudo."
     exit 1
@@ -45,8 +44,8 @@ ensure_root() {
 }
 
 check_cmd() {
-  # 🔍 Verifica existencia de comando
-  command -v "$1" >/dev/null 2>&1 || { err "Falta comando '$1'."; exit 1; }
+  command -v "$1" >/dev/null 2>&1 \
+    || { err "Falta comando '$1'. Instálalo primero."; exit 1; }
 }
 
 # ────────────────────────────────────────────────────────────
@@ -62,8 +61,7 @@ backup_configs() {
   cp /etc/default/cpufrequtils       "$BACKUP_ROOT/cpufreq/"   2>/dev/null || warn "cpufrequtils no existe"
   cp /etc/chrony/chrony.conf         "$BACKUP_ROOT/chrony/"    2>/dev/null || warn "chrony.conf no existe"
   cp /etc/apt/apt.conf.d/50unattended-upgrades \
-                                      "$BACKUP_ROOT/apt/"       2>/dev/null \
-                                      || warn "unattended-upgrades conf no existe"
+                                      "$BACKUP_ROOT/apt/"       2>/dev/null || warn "unattended-upgrades conf no existe"
   log "Backup completado"
 }
 
@@ -74,17 +72,17 @@ rollback() {
   local BACKUP_DIR
   BACKUP_DIR=$(ls -td /root/optimize-backup-* 2>/dev/null | head -n1)
   if [[ -z "$BACKUP_DIR" || ! -d "$BACKUP_DIR" ]]; then
-    err "No se encontró backup"
+    err "No se encontró backup."
     exit 1
   fi
   log "Restaurando desde $BACKUP_DIR"
   while read -r svc; do
     systemctl enable --now "$svc" 2>/dev/null || warn "No pudo habilitar $svc"
   done < "$BACKUP_DIR/services/enabled-services.txt"
-  cp "$BACKUP_DIR/sysctl/99-custom.conf" /etc/sysctl.d/    2>/dev/null || warn
-  cp "$BACKUP_DIR/cpufreq/cpufrequtils"       /etc/default/ 2>/dev/null || warn
-  cp "$BACKUP_DIR/chrony/chrony.conf"         /etc/chrony/   2>/dev/null || warn
-  cp "$BACKUP_DIR/apt/50unattended-upgrades"  /etc/apt/apt.conf.d/ 2>/dev/null || warn
+  cp "$BACKUP_DIR/sysctl/99-custom.conf"      /etc/sysctl.d/   2>/dev/null || warn
+  cp "$BACKUP_DIR/cpufreq/cpufrequtils"        /etc/default/   2>/dev/null || warn
+  cp "$BACKUP_DIR/chrony/chrony.conf"          /etc/chrony/    2>/dev/null || warn
+  cp "$BACKUP_DIR/apt/50unattended-upgrades"   /etc/apt/apt.conf.d/ 2>/dev/null || warn
   systemctl daemon-reload
   sysctl --system || warn
   systemctl restart cpufrequtils chrony || warn
@@ -92,24 +90,26 @@ rollback() {
 }
 
 # ────────────────────────────────────────────────────────────
-# 🛑 Deshabilitar servicios innecesarios (interactivo)
+# 🛑 Deshabilitar servicios innecesarios (Interactivo)
 # ────────────────────────────────────────────────────────────
 disable_services_interactive() {
-  # Recoge todos los servicios .service habilitados
+  # 1) Recoge servicios habilitados
   local svcs svc
   mapfile -t svcs < <(
     systemctl list-unit-files --state=enabled \
-      | awk '/\.service/ {print $1}' \
+      | awk '/\.service$/ {print $1}' \
       | sort
   )
 
-  echo -e "${BLUE}Selecciona servicios a deshabilitar (Enter para omitir):${NC}"
+  # 2) Muestra menú de selección
+  echo -e "${BLUE}Selecciona servicios a deshabilitar (Enter para terminar):${NC}"
   select svc in "[Terminar]" "${svcs[@]}"; do
     [[ "$svc" == "[Terminar]" ]] && break
     [[ -z "$svc" ]] && { warn "Opción inválida"; continue; }
-    # Confirmación por servicio
-    read -rp "Deshabilitar $svc? (y/N): " ans
-    if [[ "$ans" =~ ^[Yy] ]]; then
+
+    # 3) Pedir confirmación
+    read -rp "¿Deshabilitar $svc? (y/N): " ans
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
       systemctl disable --now "$svc"
       log "$svc deshabilitado"
     fi
@@ -163,7 +163,7 @@ EOF
 }
 
 # ────────────────────────────────────────────────────────────
-# ⏰ Configurar Chrony (reemplaza systemd-timesyncd)
+# ⏰ Configurar Chrony
 # ────────────────────────────────────────────────────────────
 config_chrony() {
   log "Instalando y configurando Chrony"
@@ -174,7 +174,7 @@ config_chrony() {
 }
 
 # ────────────────────────────────────────────────────────────
-# 📊 Menú principal
+# 📊 Menú principal interactivo
 # ────────────────────────────────────────────────────────────
 show_menu() {
   cat <<EOF
@@ -214,7 +214,7 @@ main() {
       7) backup_configs && disable_services_interactive && config_unattended \
                          && config_cpu_governor && config_sysctl && config_chrony ;;
       8) rollback ;;
-      9) log "Saliendo..."; exit 0 ;;
+      9) log "Saliendo…" ; exit 0 ;;
       *) warn "Opción inválida." ;;
     esac
   done
